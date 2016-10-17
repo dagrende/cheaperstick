@@ -30,7 +30,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.println("] ");
+
   if (strcmp(topic, "esp/2/proove/send") == 0) {
+    // got a send message - send on 433MHz
     char code[100];
     if (length < sizeof code) {
       strncpy(code, (char *)payload, length);
@@ -70,101 +72,107 @@ void reconnect() {
   }
 }
 
-  // void handleNotFound() {
-  //   String query = server.uri();
-  //   if (query.startsWith("/prefs/")) {
-  //   }
-  // }
+// if webServer has the argument argName, then copy it as a string to dest (max destSize bytes), and set anySet to true.
+void setStringFromArg(char *dest, size_t destSize, char *argName, boolean &anySet) {
+  if (webServer.hasArg(argName)) {
+    strncpy(dest, webServer.arg(argName).c_str(), destSize);
+    dest[destSize - 1] = 0;
+    anySet = true;
+  }
+}
 
-  void setStringFromArg(char *dest, size_t destSize, char *argName, boolean &anySet) {
-    if (webServer.hasArg(argName)) {
-      strncpy(dest, webServer.arg(argName).c_str(), destSize);
-      dest[destSize - 1] = 0;
-      anySet = true;
-    }
+void setup() {
+  Serial.begin(115200);
+
+  EEPROM.begin(512);
+  EEPROM.get(0, prefs);
+  if (prefs.magicNumber != defaultPrefs.magicNumber) {
+    // EEPROM was empty - init with default prefs
+    Serial.println("empty prefs - setting defaults");
+    memcpy(&prefs, &defaultPrefs, sizeof prefs);
   }
 
-  void setup() {
-    Serial.begin(115200);
+  delay(10);
 
-    EEPROM.get(0, prefs);
-    if (prefs.magicNumber != defaultPrefs.magicNumber) {
-      // EEPROM was empty - init with default prefs
-      Serial.println("empty prefs - setting defaults");
-      memcpy(&prefs, &defaultPrefs, sizeof prefs);
-    }
+  // try connecting to wifi
+  Serial.print("Connecting to ");
+  Serial.println(prefs.ssid);
+  WiFi.begin(prefs.ssid, prefs.password);
+  while (WiFi.status() != WL_CONNECTED && wifiTriesLeft > 0) {
+    delay(500);
+    Serial.print(".");
+    wifiTriesLeft--;
+  }
+  Serial.println("");
+  if (WiFi.status() == WL_CONNECTED) {
+    // log success and connect to mqtt setServer
+    Serial.print("WiFi connected as "); Serial.println(WiFi.localIP());
 
-    delay(10);
-
-    Serial.print("Connecting to ");
-    Serial.println(prefs.ssid);
-    WiFi.begin(prefs.ssid, prefs.password);
-    while (WiFi.status() != WL_CONNECTED && wifiTriesLeft > 0) {
-      delay(500);
-      Serial.print(".");
-      wifiTriesLeft--;
-    }
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("");
-      Serial.print("WiFi connected as "); Serial.println(WiFi.localIP());
-
-      client.setServer(prefs.mqtt_server, 1883);
-      client.setCallback(callback);
-    } else {
-      Serial.println("changing to Access Point mode ");
-      WiFi.mode(WIFI_AP);
-      WiFi.softAP("cheaperstick", "bettertoo");
-    }
-
-    // get all prefs except password as json
-    webServer.on("/prefs", HTTP_GET, [](){
-      StaticJsonBuffer<200> jsonBuffer;
-      JsonObject& jsonObject = jsonBuffer.createObject();
-      jsonObject["ssid"] = prefs.ssid;
-      jsonObject["mqtt_server"] = prefs.mqtt_server;
-      char printBuf[200];
-      jsonObject.printTo(printBuf, sizeof printBuf);
-      webServer.send(200, "text/plain", printBuf);
-    });
-
-    // set POSTed prefs and save if EEPROM
-    webServer.on("/prefs", HTTP_POST, [](){
-      boolean anySet = false;
-      setStringFromArg(prefs.ssid, sizeof prefs.ssid, "ssid", anySet);
-      setStringFromArg(prefs.password, sizeof prefs.password, "password", anySet);
-      setStringFromArg(prefs.mqtt_server, sizeof prefs.mqtt_server, "mqtt_server", anySet);
-      if (anySet) {
-        Serial.println("saving prefs");
-        EEPROM.put(0, prefs);
-      }
-      webServer.send(200);
-    });
-
-    webServer.begin();
-
-    // webServer.onNotFound(handleNotFound);
-
-    pinMode(ledPin, OUTPUT);
-    digitalWrite(ledPin, HIGH);
-
-    mySwitch.enableReceive(digitalPinToInterrupt(4));
-    mySwitch.enableTransmit(14);
+    client.setServer(prefs.mqtt_server, 1883);
+    client.setCallback(callback);
+  } else {
+    // log failure and chage to AP mode
+    Serial.println("failed connecting to wifi AP - changing to Access Point mode ssid cheaperstick pw bettertoo");
+    Serial.println("browse: http://192.168.4.1");
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP("cheaperstick", "bettertoo");
   }
 
-  void loop() {
-    if (WiFi.status() == WL_CONNECTED && !client.connected() && mqttTriesLeft > 0) {
-      reconnect();
-      mqttTriesLeft--;
-    }
-    client.loop();
-    webServer.handleClient();
+  // web service to get all prefs except password as json
+  webServer.on("/prefs", HTTP_GET, [](){
+    StaticJsonBuffer<200> jsonBuffer;
+    JsonObject& jsonObject = jsonBuffer.createObject();
+    jsonObject["ssid"] = prefs.ssid;
+    jsonObject["mqtt_server"] = prefs.mqtt_server;
+    char printBuf[200];
+    jsonObject.printTo(printBuf, sizeof printBuf);
+    webServer.send(200, "text/plain", printBuf);
+  });
 
-    if (mySwitch.available()) {
-      char buf[100];
-      ltoa(mySwitch.getReceivedValue(), buf, 2);
-      Serial.print("esp/2/proove/receive: ");
-      Serial.println(buf);
-      client.publish("esp/2/proove/receive", buf);
-      mySwitch.resetAvailable();
+  // web service to set POSTed prefs and save if EEPROM
+  webServer.on("/prefs", HTTP_POST, [](){
+    boolean anySet = false;
+    setStringFromArg(prefs.ssid, sizeof prefs.ssid, "ssid", anySet);
+    setStringFromArg(prefs.password, sizeof prefs.password, "password", anySet);
+    setStringFromArg(prefs.mqtt_server, sizeof prefs.mqtt_server, "mqtt_server", anySet);
+    if (anySet) {
+      Serial.println("saving prefs");
+      EEPROM.put(0, prefs);
+      EEPROM.commit();
     }
+    webServer.send(200);
+  });
+
+  // start web server
+  webServer.begin();
+
+  // init LED
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, HIGH);
+
+  // init 433MHz radio driver
+  mySwitch.enableReceive(digitalPinToInterrupt(4));
+  mySwitch.enableTransmit(14);
+}
+
+void loop() {
+  // if not connected to mqtt broker - connect
+  if (WiFi.status() == WL_CONNECTED && !client.connected() && mqttTriesLeft > 0) {
+    reconnect();
+    mqttTriesLeft--;
   }
+  // poll mqtt
+  client.loop();
+
+  // poll web server
+  webServer.handleClient();
+
+  // check received 433MHz remote control signal
+  if (mySwitch.available()) {
+    char buf[100];
+    ltoa(mySwitch.getReceivedValue(), buf, 2);
+    Serial.print("esp/2/proove/receive: "); Serial.println(buf);
+    client.publish("esp/2/proove/receive", buf);
+    mySwitch.resetAvailable();
+  }
+}
