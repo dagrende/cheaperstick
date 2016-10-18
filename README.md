@@ -10,6 +10,7 @@ It can be used to control cheap home control devices. Currently it supports some
 - connects to an MQTT server
 - sends an MQTT message on receiving a 433MHz code from a remote control
 - on receiving an MQTT message it sends a 433MHz remote control code
+- configuration is stored in EEPROM
 
 ## Planned Features
 
@@ -21,7 +22,6 @@ It can be used to control cheap home control devices. Currently it supports some
   - setting MQTT server ip
   - setting mDNS name to be able to reach admin page by ip name instead of number
   - sniffing various types of remote controls
-- configuration is stored in flash
 - acting as an AP if it can't connect to WiFi, to enable access to admin page
 
 ## Supported hardware

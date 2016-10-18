@@ -1,0 +1,69 @@
+<html>
+  <head><title>CheaperStick Web Admin</title></head>
+  <style>
+    body > div {
+      background-color: #ddd;
+      display: inline-block;
+      padding: .2em;
+    }
+    form {
+      margin-bottom: 0;
+    }
+    form > input {
+      margin-top: .5em;
+    }
+  </style>
+  <body>
+    <div>
+      <form action="/prefs" method="POST">
+        <table>
+          <tr>
+            <td>ssid</td>
+            <td><input id="ssid" name="ssid" type="text"></td>
+          </tr>
+          <tr>
+            <td>password</td>
+            <td><input id="password" name="password" type="password"></td>
+          </tr>
+          <tr>
+            <td>mqtt server</td>
+            <td><input id="mqtt_server" name="mqtt_server" type="text"></td>
+          </tr>
+        </table>
+        <input name="form_submit" type="hidden" value="true">
+        <input type="submit" value="Save">
+      </form>
+    </div>
+  </body>
+  <script>
+    getJSON('/prefs', function(data) {
+      console.log('ssid: ' + data.ssid);
+      document.getElementById('ssid').value = data.ssid;
+      document.getElementById('mqtt_server').value = data.mqtt_server;
+    }, function(status) {
+      console.error('error getting prefs: ', status);
+    });
+
+    function getJSON(url, successHandler, errorHandler) {
+      var xhr = typeof XMLHttpRequest != 'undefined'
+        ? new XMLHttpRequest()
+        : new ActiveXObject('Microsoft.XMLHTTP');
+      xhr.open('get', url, true);
+      xhr.onreadystatechange = function() {
+        var status;
+        var data;
+        // https://xhr.spec.whatwg.org/#dom-xmlhttprequest-readystate
+        if (xhr.readyState == 4) { // `DONE`
+          status = xhr.status;
+          if (status == 200) {
+            data = JSON.parse(xhr.responseText);
+            successHandler && successHandler(data);
+          } else {
+            errorHandler && errorHandler(status);
+          }
+        }
+      };
+      xhr.send();
+    };
+  </script>
+</html>

@@ -4,6 +4,9 @@
 #include <PubSubClient.h>
 #include <RCSwitch.h>
 #include <ArduinoJson.h>
+#include <pgmspace.h>
+
+#include "webapp.h"
 
 // Connect to the WiFi
 typedef struct {
@@ -26,12 +29,40 @@ RCSwitch mySwitch = RCSwitch();
 
 const byte ledPin = LED_BUILTIN; // LED pin on Wemos d1 mini
 
+void httpRespond(WiFiClient client, int status) {
+  client.print("HTTP/1.1 ");
+  client.print(status);
+  client.println(" OK");
+  client.println("Access-Control-Allow-Origin: *");
+  client.println(""); // mark end of headers
+}
+
+bool loadFromFlash(WiFiClient client, String path) {
+  if (path.endsWith("/")) path += "index.html";
+  int NumFiles = sizeof(files)/sizeof(struct t_websitefiles);
+  for (int i=0; i<NumFiles; i++) {
+    if (path.endsWith(String(files[i].filename))) {
+      client.println("HTTP/1.1 200 OK");
+      client.print("Content-Type: "); client.println(files[i].mime);
+      client.print("Content-Length: "); client.println(String(files[i].len));
+      client.println("Access-Control-Allow-Origin: *");
+      client.println(""); //  do not forget this one
+      _FLASH_ARRAY<uint8_t>* filecontent = (_FLASH_ARRAY<uint8_t>*)files[i].content;
+      filecontent->open();
+      client.write(*filecontent, 100);
+      return true;
+    }
+  }
+  httpRespond(client, 201);
+  return false;
+}
+
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.println("] ");
 
-  if (strcmp(topic, "esp/2/proove/send") == 0) {
+  if (strcmp(topic, "esp/2/send") == 0) {
     // got a send message - send on 433MHz
     char code[100];
     if (length < sizeof code) {
@@ -73,12 +104,26 @@ void reconnect() {
 }
 
 // if webServer has the argument argName, then copy it as a string to dest (max destSize bytes), and set anySet to true.
-void setStringFromArg(char *dest, size_t destSize, char *argName, boolean &anySet) {
+void setStringFromArg(char *dest, size_t destSize, char *argName, boolean ignoreEmpty, boolean &anySet) {
   if (webServer.hasArg(argName)) {
-    strncpy(dest, webServer.arg(argName).c_str(), destSize);
-    dest[destSize - 1] = 0;
-    anySet = true;
+    String value = webServer.arg(argName);
+    if (!ignoreEmpty || value.length() > 0) {
+      strncpy(dest, value.c_str(), destSize);
+      dest[destSize - 1] = 0;
+      anySet = true;
+    }
   }
+}
+
+void handleNotFound(){
+  String query = webServer.uri();
+  String path = query.substring(1);
+  if (query.length() < 2) {
+    path = "index.html";
+  }
+  Serial.println(path);
+  loadFromFlash(webServer.client(), path);
+  Serial.println("responded");
 }
 
 void setup() {
@@ -95,7 +140,7 @@ void setup() {
   delay(10);
 
   // try connecting to wifi
-  Serial.print("Connecting to ");
+  Serial.print("\nConnecting to ");
   Serial.println(prefs.ssid);
   WiFi.begin(prefs.ssid, prefs.password);
   while (WiFi.status() != WL_CONNECTED && wifiTriesLeft > 0) {
@@ -120,6 +165,7 @@ void setup() {
 
   // web service to get all prefs except password as json
   webServer.on("/prefs", HTTP_GET, [](){
+    Serial.println("GET /prefs");
     StaticJsonBuffer<200> jsonBuffer;
     JsonObject& jsonObject = jsonBuffer.createObject();
     jsonObject["ssid"] = prefs.ssid;
@@ -127,21 +173,30 @@ void setup() {
     char printBuf[200];
     jsonObject.printTo(printBuf, sizeof printBuf);
     webServer.send(200, "text/plain", printBuf);
+    Serial.println("GET /prefs responded");
   });
 
   // web service to set POSTed prefs and save if EEPROM
   webServer.on("/prefs", HTTP_POST, [](){
+    Serial.println("POST prefs");
     boolean anySet = false;
-    setStringFromArg(prefs.ssid, sizeof prefs.ssid, "ssid", anySet);
-    setStringFromArg(prefs.password, sizeof prefs.password, "password", anySet);
-    setStringFromArg(prefs.mqtt_server, sizeof prefs.mqtt_server, "mqtt_server", anySet);
+    setStringFromArg(prefs.ssid, sizeof prefs.ssid, "ssid", false, anySet);
+    setStringFromArg(prefs.password, sizeof prefs.password, "password", true, anySet);
+    setStringFromArg(prefs.mqtt_server, sizeof prefs.mqtt_server, "mqtt_server", false, anySet);
     if (anySet) {
       Serial.println("saving prefs");
-      EEPROM.put(0, prefs);
-      EEPROM.commit();
+      // EEPROM.put(0, prefs);
+      // EEPROM.commit();
     }
-    webServer.send(200);
+    if (webServer.hasArg("form_submit")) {
+      Serial.println("was form submit");
+      loadFromFlash(webServer.client(), "index.html");
+    } else {
+      webServer.send(200);
+    }
   });
+
+  webServer.onNotFound(handleNotFound);
 
   // start web server
   webServer.begin();
@@ -171,8 +226,8 @@ void loop() {
   if (mySwitch.available()) {
     char buf[100];
     ltoa(mySwitch.getReceivedValue(), buf, 2);
-    Serial.print("esp/2/proove/receive: "); Serial.println(buf);
-    client.publish("esp/2/proove/receive", buf);
+    Serial.print("esp/2/receive: "); Serial.println(buf);
+    client.publish("esp/2/receive", buf);
     mySwitch.resetAvailable();
   }
 }
