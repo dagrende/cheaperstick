@@ -8,12 +8,17 @@
 
 #include "webapp.h"
 
-// Connect to the WiFi
+// prefs - add new prefs at end to preserve saved ones
 typedef struct {
   long magicNumber = 77824591l;
   char ssid[50] = "";
   char password[50] = "";
   char mqtt_server[50] = "192.168.0.33";
+  char mqtt_prefix[50] = "esp/";
+  bool enableWifi = true;
+  bool enableMqtt = false;
+  bool enableRcReceive = true;
+  bool enableRcTransmit = true;
 } Prefs;
 
 Prefs prefs;
@@ -62,17 +67,16 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print(topic);
   Serial.println("] ");
 
-  if (strcmp(topic, "esp/2/send") == 0) {
+  if ((String(prefs.mqtt_prefix) + "send") == topic) {
     // got a send message - send on 433MHz
     char code[100];
     if (length < sizeof code) {
       strncpy(code, (char *)payload, length);
       code[length] = 0;
-      Serial.print("esp/2/proove/send: ");
-      Serial.println(code);
+      Serial.print(topic); Serial.print(": "); Serial.println(code);
       mySwitch.send(code);
     }
-  } else if (strcmp(topic, "esp/2/setProtocol") == 0) {
+  } else if ((String(prefs.mqtt_prefix) + "setProtocol") == topic) {
     int protocolNo = ((char)payload[0]) - '0';
     Serial.println(protocolNo);
     if (1 <= protocolNo && protocolNo <= 6) {
@@ -86,25 +90,26 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 void reconnect() {
   // Loop until we're reconnected
-  while (!client.connected()) {
+  while (!client.connected() && mqttTriesLeft > 0) {
     Serial.print("Attempting ("); Serial.print(mqttTriesLeft); Serial.print(") MQTT connection to "); Serial.print(prefs.mqtt_server); Serial.print("...");
     // Attempt to connect
     if (client.connect("ESP8266 Client")) {
       Serial.println("connected");
       // ... and subscribe to topic
-      client.subscribe("esp/2/#");
+      client.subscribe((String(prefs.mqtt_prefix) + "#").c_str());
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
       Serial.println(" try again in 5 seconds");
       // Wait 5 seconds before retrying
       delay(5000);
+      mqttTriesLeft--;
     }
   }
 }
 
 // if webServer has the argument argName, then copy it as a string to dest (max destSize bytes), and set anySet to true.
-void setStringFromArg(char *dest, size_t destSize, char *argName, boolean ignoreEmpty, boolean &anySet) {
+void setStringFromArg(char *dest, size_t destSize, char *argName, bool ignoreEmpty, bool &anySet) {
   if (webServer.hasArg(argName)) {
     String value = webServer.arg(argName);
     if (!ignoreEmpty || value.length() > 0) {
@@ -112,6 +117,15 @@ void setStringFromArg(char *dest, size_t destSize, char *argName, boolean ignore
       dest[destSize - 1] = 0;
       anySet = true;
     }
+  }
+}
+
+// if webServer has the argument argName, then copy it as a string to dest (max destSize bytes), and set anySet to true.
+void setBooleanFromArg(bool &dest, char *argName, bool ignoreEmpty, bool &anySet) {
+  if (webServer.hasArg(argName)) {
+    Serial.print(argName); Serial.print(": "); Serial.println(webServer.hasArg(argName));
+    dest = webServer.arg(argName).equalsIgnoreCase("true");
+    anySet = true;
   }
 }
 
@@ -129,6 +143,8 @@ void handleNotFound(){
 void setup() {
   Serial.begin(115200);
 
+  // read saved prefs
+  memcpy(&prefs, &defaultPrefs, sizeof prefs);
   EEPROM.begin(512);
   EEPROM.get(0, prefs);
   if (prefs.magicNumber != defaultPrefs.magicNumber) {
@@ -148,7 +164,7 @@ void setup() {
     Serial.print(".");
     wifiTriesLeft--;
   }
-  Serial.println("");
+  Serial.println();
   if (WiFi.status() == WL_CONNECTED) {
     // log success and connect to mqtt setServer
     Serial.print("WiFi connected as "); Serial.println(WiFi.localIP());
@@ -165,32 +181,39 @@ void setup() {
 
   // web service to get all prefs except password as json
   webServer.on("/prefs", HTTP_GET, [](){
-    Serial.println("GET /prefs");
     StaticJsonBuffer<200> jsonBuffer;
     JsonObject& jsonObject = jsonBuffer.createObject();
+    jsonObject.set("enableWifi", prefs.enableWifi);
+    jsonObject.set("enableMqtt", prefs.enableMqtt);
+    jsonObject.set("enableRcReceive", prefs.enableRcReceive);
+    jsonObject.set("enableRcTransmit", prefs.enableRcTransmit);
     jsonObject["ssid"] = prefs.ssid;
     jsonObject["mqtt_server"] = prefs.mqtt_server;
+    jsonObject["mqtt_prefix"] = prefs.mqtt_prefix;
     char printBuf[200];
     jsonObject.printTo(printBuf, sizeof printBuf);
     webServer.send(200, "text/plain", printBuf);
-    Serial.println("GET /prefs responded");
   });
 
   // web service to set POSTed prefs and save if EEPROM
   webServer.on("/prefs", HTTP_POST, [](){
-    Serial.println("POST prefs");
-    boolean anySet = false;
+    bool anySet = false;
     setStringFromArg(prefs.ssid, sizeof prefs.ssid, "ssid", false, anySet);
     setStringFromArg(prefs.password, sizeof prefs.password, "password", true, anySet);
     setStringFromArg(prefs.mqtt_server, sizeof prefs.mqtt_server, "mqtt_server", false, anySet);
+    setStringFromArg(prefs.mqtt_prefix, sizeof prefs.mqtt_prefix, "mqtt_prefix", false, anySet);
+    setBooleanFromArg(prefs.enableWifi, "enableWifi", true, anySet);
+    setBooleanFromArg(prefs.enableMqtt, "enableMqtt", true, anySet);
+    setBooleanFromArg(prefs.enableRcReceive, "enableRcReceive", true, anySet);
+    setBooleanFromArg(prefs.enableRcTransmit, "enableRcTransmit", true, anySet);
     if (anySet) {
       Serial.println("saving prefs");
-      // EEPROM.put(0, prefs);
-      // EEPROM.commit();
+      EEPROM.put(0, prefs);
+      EEPROM.commit();
     }
     if (webServer.hasArg("form_submit")) {
-      Serial.println("was form submit");
-      loadFromFlash(webServer.client(), "index.html");
+      webServer.sendHeader("Location", "/", true);
+      webServer.send (302, "text/plain", "");
     } else {
       webServer.send(200);
     }
@@ -206,28 +229,36 @@ void setup() {
   digitalWrite(ledPin, HIGH);
 
   // init 433MHz radio driver
-  mySwitch.enableReceive(digitalPinToInterrupt(4));
-  mySwitch.enableTransmit(14);
+  if (prefs.enableRcReceive) {
+    mySwitch.enableReceive(digitalPinToInterrupt(4));
+  }
+  if (prefs.enableRcTransmit) {
+    mySwitch.enableTransmit(14);
+  }
 }
 
 void loop() {
   // if not connected to mqtt broker - connect
-  if (WiFi.status() == WL_CONNECTED && !client.connected() && mqttTriesLeft > 0) {
+  if (prefs.enableMqtt && WiFi.status() == WL_CONNECTED && !client.connected()) {
     reconnect();
-    mqttTriesLeft--;
   }
   // poll mqtt
-  client.loop();
+  if (prefs.enableMqtt) {
+    client.loop();
+  }
 
   // poll web server
   webServer.handleClient();
 
   // check received 433MHz remote control signal
-  if (mySwitch.available()) {
-    char buf[100];
-    ltoa(mySwitch.getReceivedValue(), buf, 2);
-    Serial.print("esp/2/receive: "); Serial.println(buf);
-    client.publish("esp/2/receive", buf);
-    mySwitch.resetAvailable();
+  if (prefs.enableRcReceive) {
+    if (mySwitch.available()) {
+      char buf[100];
+      ltoa(mySwitch.getReceivedValue(), buf, 2);
+      if (prefs.enableMqtt) {
+        client.publish((String(prefs.mqtt_prefix) + "receive").c_str(), buf);
+      }
+      mySwitch.resetAvailable();
+    }
   }
 }

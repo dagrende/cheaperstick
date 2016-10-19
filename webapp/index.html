@@ -18,16 +18,36 @@
       <form action="/prefs" method="POST">
         <table>
           <tr>
-            <td>ssid</td>
+            <td colspan="2"><label><input id="enableWifi" name="enableWifi" value="true" type="checkbox">enable wifi</label>
+              <input name="enableWifi" value="false" type="hidden"></td>
+          </tr>
+          <tr>
+            <td>wifi ssid</td>
             <td><input id="ssid" name="ssid" type="text"></td>
           </tr>
           <tr>
-            <td>password</td>
+            <td>wifi password</td>
             <td><input id="password" name="password" type="password"></td>
+          </tr>
+          <tr>
+            <td colspan="2"><label><input id="enableMqtt" name="enableMqtt" value="true" type="checkbox">enable mqtt</label>
+              <input name="enableMqtt" value="false" type="hidden"></td>
           </tr>
           <tr>
             <td>mqtt server</td>
             <td><input id="mqtt_server" name="mqtt_server" type="text"></td>
+          </tr>
+          <tr>
+            <td>mqtt topic prefix</td>
+            <td><input id="mqtt_prefix" name="mqtt_prefix" type="text"></td>
+          </tr>
+          <tr>
+            <td colspan="2"><label><input id="enableRcReceive" name="enableRcReceive" value="true" type="checkbox">enable remote receive</label>
+              <input name="enableRcReceive" value="false" type="hidden"></td>
+          </tr>
+          <tr>
+            <td colspan="2"><label><input id="enableRcTransmit" name="enableRcTransmit" value="true" type="checkbox">enable remote transmit</label>
+              <input name="enableRcTransmit" value="false" type="hidden"></td>
           </tr>
         </table>
         <input name="form_submit" type="hidden" value="true">
@@ -37,9 +57,13 @@
   </body>
   <script>
     getJSON('/prefs', function(data) {
-      console.log('ssid: ' + data.ssid);
+      document.getElementById('enableWifi').checked = data.enableWifi;
+      document.getElementById('enableMqtt').checked = data.enableMqtt;
+      document.getElementById('enableRcReceive').checked = data.enableRcReceive;
+      document.getElementById('enableRcTransmit').checked = data.enableRcTransmit;
       document.getElementById('ssid').value = data.ssid;
       document.getElementById('mqtt_server').value = data.mqtt_server;
+      document.getElementById('mqtt_prefix').value = data.mqtt_prefix;
     }, function(status) {
       console.error('error getting prefs: ', status);
     });
