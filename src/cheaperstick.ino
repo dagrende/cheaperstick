@@ -44,28 +44,20 @@ void httpRespond(WiFiClient client, int status) {
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.println("] ");
-
   if ((String(prefs.mqtt_prefix) + "send") == topic) {
     // got a send message - send on 433MHz
     char code[100];
     if (length < sizeof code) {
       strncpy(code, (char *)payload, length);
       code[length] = 0;
-      Serial.print(topic); Serial.print(": "); Serial.println(code);
       mySwitch.send(code);
     }
   } else if ((String(prefs.mqtt_prefix) + "setProtocol") == topic) {
     int protocolNo = ((char)payload[0]) - '0';
-    Serial.println(protocolNo);
     if (1 <= protocolNo && protocolNo <= 6) {
-      Serial.print("changed to protocol no "); Serial.println(protocolNo);
       mySwitch.setProtocol(protocolNo);
     }
   }
-  Serial.println();
 }
 
 
@@ -79,8 +71,7 @@ void reconnect() {
       // ... and subscribe to topic
       client.subscribe((String(prefs.mqtt_prefix) + "#").c_str());
     } else {
-      Serial.print("mqtt error ");
-      Serial.print(client.state());
+      Serial.print("mqtt error "); Serial.println(client.state());
       // Wait 5 seconds before retrying
       delay(5000);
       mqttTriesLeft--;
@@ -121,7 +112,6 @@ void setup() {
   EEPROM.get(0, prefs);
   if (prefs.magicNumber != defaultPrefs.magicNumber) {
     // EEPROM was empty - init with default prefs
-    Serial.println("empty prefs - setting defaults");
     memcpy(&prefs, &defaultPrefs, sizeof prefs);
   }
 
@@ -132,7 +122,6 @@ void setup() {
   WiFi.begin(prefs.ssid, prefs.password);
   while (WiFi.status() != WL_CONNECTED && wifiTriesLeft > 0) {
     delay(500);
-    Serial.print(".");
     wifiTriesLeft--;
   }
   Serial.println();
@@ -179,7 +168,6 @@ void setup() {
     setBoolFromArg(request, prefs.enableRcReceive, "enableRcReceive", true, anySet);
     setBoolFromArg(request, prefs.enableRcTransmit, "enableRcTransmit", true, anySet);
     if (anySet) {
-      Serial.println("saving prefs");
       EEPROM.put(0, prefs);
       EEPROM.commit();
     }
