@@ -1,12 +1,13 @@
 #include <EEPROM.h>
 #include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
+#include <ESPAsyncWebServer.h>
+#include <ESPAsyncTCP.h>
+#include <Hash.h>
 #include <PubSubClient.h>
 #include <RCSwitch.h>
+#include <AsyncJson.h>
 #include <ArduinoJson.h>
-#include <pgmspace.h>
-
-#include "webapp.h"
+#include <FS.h>
 
 // prefs - add new prefs at end to preserve saved ones
 typedef struct {
@@ -29,7 +30,7 @@ int wifiTriesLeft = 6;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
-ESP8266WebServer webServer(80);
+AsyncWebServer webServer(80);
 RCSwitch mySwitch = RCSwitch();
 
 const byte ledPin = LED_BUILTIN; // LED pin on Wemos d1 mini
@@ -40,26 +41,6 @@ void httpRespond(WiFiClient client, int status) {
   client.println(" OK");
   client.println("Access-Control-Allow-Origin: *");
   client.println(""); // mark end of headers
-}
-
-bool loadFromFlash(WiFiClient client, String path) {
-  if (path.endsWith("/")) path += "index.html";
-  int NumFiles = sizeof(files)/sizeof(struct t_websitefiles);
-  for (int i=0; i<NumFiles; i++) {
-    if (path.endsWith(String(files[i].filename))) {
-      client.println("HTTP/1.1 200 OK");
-      client.print("Content-Type: "); client.println(files[i].mime);
-      client.print("Content-Length: "); client.println(String(files[i].len));
-      client.println("Access-Control-Allow-Origin: *");
-      client.println(""); //  do not forget this one
-      _FLASH_ARRAY<uint8_t>* filecontent = (_FLASH_ARRAY<uint8_t>*)files[i].content;
-      filecontent->open();
-      client.write(*filecontent, 100);
-      return true;
-    }
-  }
-  httpRespond(client, 201);
-  return false;
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -91,16 +72,15 @@ void callback(char* topic, byte* payload, unsigned int length) {
 void reconnect() {
   // Loop until we're reconnected
   while (!client.connected() && mqttTriesLeft > 0) {
-    Serial.print("Attempting ("); Serial.print(mqttTriesLeft); Serial.print(") MQTT connection to "); Serial.print(prefs.mqtt_server); Serial.print("...");
+    Serial.print("mqtt connecting "); Serial.println(prefs.mqtt_server);
     // Attempt to connect
-    if (client.connect("ESP8266 Client")) {
-      Serial.println("connected");
+    if (client.connect("cheapstick")) {
+      Serial.println("mqtt connected");
       // ... and subscribe to topic
       client.subscribe((String(prefs.mqtt_prefix) + "#").c_str());
     } else {
-      Serial.print("failed, rc=");
+      Serial.print("mqtt error ");
       Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
       // Wait 5 seconds before retrying
       delay(5000);
       mqttTriesLeft--;
@@ -109,9 +89,9 @@ void reconnect() {
 }
 
 // if webServer has the argument argName, then copy it as a string to dest (max destSize bytes), and set anySet to true.
-void setStringFromArg(char *dest, size_t destSize, char *argName, bool ignoreEmpty, bool &anySet) {
-  if (webServer.hasArg(argName)) {
-    String value = webServer.arg(argName);
+void setStringFromArg(AsyncWebServerRequest *request, char *dest, size_t destSize, const char *argName, bool ignoreEmpty, bool &anySet) {
+  if (request->hasArg(argName)) {
+    String value = request->arg(argName);
     if (!ignoreEmpty || value.length() > 0) {
       strncpy(dest, value.c_str(), destSize);
       dest[destSize - 1] = 0;
@@ -121,23 +101,15 @@ void setStringFromArg(char *dest, size_t destSize, char *argName, bool ignoreEmp
 }
 
 // if webServer has the argument argName, then copy it as a string to dest (max destSize bytes), and set anySet to true.
-void setBooleanFromArg(bool &dest, char *argName, bool ignoreEmpty, bool &anySet) {
-  if (webServer.hasArg(argName)) {
-    Serial.print(argName); Serial.print(": "); Serial.println(webServer.hasArg(argName));
-    dest = webServer.arg(argName).equalsIgnoreCase("true");
+void setBoolFromArg(AsyncWebServerRequest *request, bool &dest, const char *argName, bool ignoreEmpty, bool &anySet) {
+  if (request->hasArg(argName)) {
+    dest = request->arg(argName).equalsIgnoreCase("true");
     anySet = true;
   }
 }
 
-void handleNotFound(){
-  String query = webServer.uri();
-  String path = query.substring(1);
-  if (query.length() < 2) {
-    path = "index.html";
-  }
-  Serial.println(path);
-  loadFromFlash(webServer.client(), path);
-  Serial.println("responded");
+void handleNotFound(AsyncWebServerRequest *request){
+  request->send(404);
 }
 
 void setup() {
@@ -156,8 +128,7 @@ void setup() {
   delay(10);
 
   // try connecting to wifi
-  Serial.print("\nConnecting to ");
-  Serial.println(prefs.ssid);
+  Serial.print("\nwifi connecting "); Serial.println(prefs.ssid);
   WiFi.begin(prefs.ssid, prefs.password);
   while (WiFi.status() != WL_CONNECTED && wifiTriesLeft > 0) {
     delay(500);
@@ -167,20 +138,22 @@ void setup() {
   Serial.println();
   if (WiFi.status() == WL_CONNECTED) {
     // log success and connect to mqtt setServer
-    Serial.print("WiFi connected as "); Serial.println(WiFi.localIP());
+    Serial.print("wifi connected "); Serial.println(WiFi.localIP());
 
     client.setServer(prefs.mqtt_server, 1883);
     client.setCallback(callback);
   } else {
     // log failure and chage to AP mode
-    Serial.println("failed connecting to wifi AP - changing to Access Point mode ssid cheaperstick pw bettertoo");
-    Serial.println("browse: http://192.168.4.1");
+    Serial.println("wifi error - changing to Access Point mode ssid cheaperstick pw bettertoo, open: http://192.168.4.1");
     WiFi.mode(WIFI_AP);
     WiFi.softAP("cheaperstick", "bettertoo");
   }
 
+  SPIFFS.begin();
+
   // web service to get all prefs except password as json
-  webServer.on("/prefs", HTTP_GET, [](){
+  webServer.on("/prefs", HTTP_GET, [](AsyncWebServerRequest *request){
+    AsyncResponseStream *response = request->beginResponseStream("text/json");
     StaticJsonBuffer<200> jsonBuffer;
     JsonObject& jsonObject = jsonBuffer.createObject();
     jsonObject.set("enableWifi", prefs.enableWifi);
@@ -190,38 +163,37 @@ void setup() {
     jsonObject["ssid"] = prefs.ssid;
     jsonObject["mqtt_server"] = prefs.mqtt_server;
     jsonObject["mqtt_prefix"] = prefs.mqtt_prefix;
-    char printBuf[200];
-    jsonObject.printTo(printBuf, sizeof printBuf);
-    webServer.send(200, "text/plain", printBuf);
+    jsonObject.printTo(*response);
+    request->send(response);
   });
 
   // web service to set POSTed prefs and save if EEPROM
-  webServer.on("/prefs", HTTP_POST, [](){
+  webServer.on("/prefs", HTTP_POST, [](AsyncWebServerRequest *request){
     bool anySet = false;
-    setStringFromArg(prefs.ssid, sizeof prefs.ssid, "ssid", false, anySet);
-    setStringFromArg(prefs.password, sizeof prefs.password, "password", true, anySet);
-    setStringFromArg(prefs.mqtt_server, sizeof prefs.mqtt_server, "mqtt_server", false, anySet);
-    setStringFromArg(prefs.mqtt_prefix, sizeof prefs.mqtt_prefix, "mqtt_prefix", false, anySet);
-    setBooleanFromArg(prefs.enableWifi, "enableWifi", true, anySet);
-    setBooleanFromArg(prefs.enableMqtt, "enableMqtt", true, anySet);
-    setBooleanFromArg(prefs.enableRcReceive, "enableRcReceive", true, anySet);
-    setBooleanFromArg(prefs.enableRcTransmit, "enableRcTransmit", true, anySet);
+    setStringFromArg(request, prefs.ssid, sizeof prefs.ssid, "ssid", false, anySet);
+    setStringFromArg(request, prefs.password, sizeof prefs.password, "password", true, anySet);
+    setStringFromArg(request, prefs.mqtt_server, sizeof prefs.mqtt_server, "mqtt_server", false, anySet);
+    setStringFromArg(request, prefs.mqtt_prefix, sizeof prefs.mqtt_prefix, "mqtt_prefix", false, anySet);
+    setBoolFromArg(request, prefs.enableWifi, "enableWifi", true, anySet);
+    setBoolFromArg(request, prefs.enableMqtt, "enableMqtt", true, anySet);
+    setBoolFromArg(request, prefs.enableRcReceive, "enableRcReceive", true, anySet);
+    setBoolFromArg(request, prefs.enableRcTransmit, "enableRcTransmit", true, anySet);
     if (anySet) {
       Serial.println("saving prefs");
       EEPROM.put(0, prefs);
       EEPROM.commit();
     }
-    if (webServer.hasArg("form_submit")) {
-      webServer.sendHeader("Location", "/", true);
-      webServer.send (302, "text/plain", "");
+    if (request->hasArg("form_submit")) {
+      request->redirect("/");
     } else {
-      webServer.send(200);
+      request->send(200);
     }
   });
 
+  webServer.serveStatic("/", SPIFFS, "/").setDefaultFile("index.html");
+
   webServer.onNotFound(handleNotFound);
 
-  // start web server
   webServer.begin();
 
   // init LED
@@ -246,9 +218,6 @@ void loop() {
   if (prefs.enableMqtt) {
     client.loop();
   }
-
-  // poll web server
-  webServer.handleClient();
 
   // check received 433MHz remote control signal
   if (prefs.enableRcReceive) {
