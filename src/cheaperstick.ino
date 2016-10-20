@@ -8,6 +8,7 @@
 #include <AsyncJson.h>
 #include <ArduinoJson.h>
 #include <FS.h>
+#include <ESP8266mDNS.h>
 
 // prefs - add new prefs at end to preserve saved ones
 typedef struct {
@@ -104,6 +105,7 @@ void handleNotFound(AsyncWebServerRequest *request){
 }
 
 void setup() {
+  MDNS.begin("cheaperstick");
   Serial.begin(115200);
 
   // read saved prefs
