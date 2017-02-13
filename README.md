@@ -65,7 +65,7 @@ See https://www.wemos.cc/product/d1-mini.html
 
 See http://www.ebay.com/itm/433Mhz-RF-transmitter-and-receiver-kit-for-Arduino-ARM-MCU-WL-/261041100836
 
-![receiver transmitter image](docs/rxtx.jpeg)
+![receiver transmitter image](docs/cheaperstick-wiring.jpeg)
 
 ## Planned Features
 
